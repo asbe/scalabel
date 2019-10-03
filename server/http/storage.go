@@ -3,6 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io/ioutil"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -10,12 +17,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"io/ioutil"
-	"os"
-	"path"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 type Storage interface {
@@ -58,10 +59,11 @@ func (fs *FileStorage) HasKey(key string) bool {
 
 func (fs *FileStorage) ListKeys(prefix string) []string {
 	files, err := ioutil.ReadDir(path.Join(fs.DataDir, prefix))
-	if err != nil {
-		return []string{}
-	}
 	keys := []string{}
+	if err != nil {
+		return keys
+	}
+
 	for _, f := range files {
 		key := f.Name()
 		key = key[:len(key)-5]
@@ -71,19 +73,22 @@ func (fs *FileStorage) ListKeys(prefix string) []string {
 }
 
 func (fs *FileStorage) Save(key string, fields map[string]interface{}) error {
-	os.MkdirAll(path.Join(fs.DataDir, filepath.Dir(key)), 0777)
+	err := os.MkdirAll(path.Join(fs.DataDir, filepath.Dir(key)), 0777)
+	if err != nil {
+		Error.Println(err)
+	}
 	path := path.Join(fs.DataDir, key+".json")
 	Info.Println(path)
-	json, err := json.MarshalIndent(fields, "", "  ")
+	var tempJson []byte
+	tempJson, err = json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(path, json, 0644)
+	err = ioutil.WriteFile(path, tempJson, 0644)
 	if err != nil {
 		return err
-	} else {
-		Info.Println("Saving file of", key)
 	}
+	Info.Println("Saving file of", key)
 	return nil
 }
 
@@ -138,7 +143,10 @@ func (ds *DynamodbStorage) Init(path string) error {
 			},
 			TableName: aws.String("scalabel"),
 		}
-		ds.svc.CreateTable(input)
+		_, err = ds.svc.CreateTable(input)
+		if err != nil {
+			Error.Println(err)
+		}
 		for i := 0; i < 30; i++ {
 			if ds.HasTable() {
 				return nil
@@ -168,7 +176,8 @@ func (ds *DynamodbStorage) HasKey(key string) bool {
 func (ds *DynamodbStorage) ListKeys(prefix string) []string {
 	filt := expression.BeginsWith(expression.Name("Key"), prefix)
 	proj := expression.NamesList(expression.Name("Key"))
-	expr, err := expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build()
+	expr, err := expression.NewBuilder().WithFilter(filt).
+		WithProjection(proj).Build()
 	if err != nil {
 		Error.Println(err)
 	}
@@ -196,9 +205,13 @@ func (ds *DynamodbStorage) ListKeys(prefix string) []string {
 	return keys
 }
 
-func (ds *DynamodbStorage) Save(key string, fields map[string]interface{}) error {
+func (ds *DynamodbStorage) Save(key string,
+	fields map[string]interface{}) error {
 	fields["Key"] = key
 	av, err := dynamodbattribute.MarshalMap(fields)
+	if err != nil {
+		Error.Println(err)
+	}
 	input := &dynamodb.PutItemInput{
 		Item:      av,
 		TableName: aws.String("scalabel"),
@@ -254,10 +267,7 @@ func (ds *DynamodbStorage) HasTable() bool {
 		TableName: aws.String("scalabel"),
 	}
 	_, err := ds.svc.DescribeTable(input)
-	if err != nil {
-		return false
-	}
-	return true
+	return (err == nil)
 }
 
 func (ss *S3Storage) Init(path string) error {
@@ -301,25 +311,44 @@ func (ss *S3Storage) HasKey(key string) bool {
 		Bucket: aws.String(ss.BucketName),
 		Key:    aws.String(path.Join(ss.DataDir, key)),
 	}
-	_, err := ss.svc.GetObject(input)
+	f, err := ss.svc.GetObject(input)
 	if err != nil {
 		return false
 	}
+	f.Body.Close()
 	return true
 }
 
 func (ss *S3Storage) ListKeys(prefix string) []string {
-	params := &s3.ListObjectsInput{
-		Bucket: aws.String(ss.BucketName),
-		Prefix: aws.String(path.Join(ss.DataDir, prefix)),
-	}
-	resp, err := ss.svc.ListObjects(params)
-	if err != nil {
-		Error.Println(err)
-	}
+	continuation_token := ""
 	keys := []string{}
-	for _, key := range resp.Contents {
-		keys = append(keys, *key.Key)
+	for {
+		params := &s3.ListObjectsV2Input{
+			Bucket: aws.String(ss.BucketName),
+			Prefix: aws.String(path.Join(ss.DataDir, prefix)),
+		}
+		if len(continuation_token) > 0 {
+			params = &s3.ListObjectsV2Input{
+				Bucket:            aws.String(ss.BucketName),
+				Prefix:            aws.String(path.Join(ss.DataDir, prefix)),
+				ContinuationToken: &continuation_token,
+			}
+		}
+
+		resp, err := ss.svc.ListObjectsV2(params)
+		if err != nil {
+			Error.Println(err)
+			break
+		}
+
+		for _, key := range resp.Contents {
+			keys = append(keys, *key.Key)
+		}
+
+		if !*resp.IsTruncated {
+			break
+		}
+		continuation_token = *resp.NextContinuationToken
 	}
 	return keys
 }
@@ -345,9 +374,9 @@ func (ss *S3Storage) Save(key string, fields map[string]interface{}) error {
 	})
 	if err != nil {
 		return err
-	} else {
-		Info.Println("Successfully added an item to the S3")
 	}
+	Info.Println("Successfully added an item to the S3")
+
 	return nil
 }
 
@@ -381,7 +410,9 @@ func (ss *S3Storage) Load(key string) (map[string]interface{}, error) {
 }
 
 func (ss *S3Storage) Delete(key string) error {
-	_, err := ss.svc.DeleteObject(&s3.DeleteObjectInput{Bucket: aws.String(ss.BucketName), Key: aws.String(key)})
+	s3ptr := &s3.DeleteObjectInput{Bucket: aws.String(ss.BucketName),
+		Key: aws.String(key)}
+	_, err := ss.svc.DeleteObject(s3ptr)
 	if err != nil {
 		return err
 	}
@@ -401,8 +432,5 @@ func (ss *S3Storage) HasBucket() bool {
 		Bucket: aws.String(ss.BucketName),
 	}
 	_, err := ss.svc.HeadBucket(input)
-	if err != nil {
-		return false
-	}
-	return true
+	return (err == nil)
 }

@@ -561,6 +561,7 @@ Seg2d.prototype.fromExportFormat = function(exportFormat) {
     }
     this.categoryPath = exportFormat.category;
     this.attributes = exportFormat.attributes;
+    this.keyframe = exportFormat.manualShape;
     return this;
   }
   return null;
@@ -747,7 +748,9 @@ Seg2d.prototype.redrawLabelCanvas = function(mainCtx) {
       }
     }
     mainCtx.fillStyle = this.styleColor();
-    this.drawTag(mainCtx, this.polys[0].centroidCoords());
+    if (!this.satItem.soloMode) {
+      this.drawTag(mainCtx, this.polys[0].centroidCoords());
+    }
   }
 
   mainCtx.restore();

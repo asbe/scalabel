@@ -1,21 +1,21 @@
 import {BaseViewer2D} from './image_base_viewer';
-import {BaseController} from '../controllers/base_controller';
+/* :: import {BaseController} from '../controllers/base_controller'; */
 import type {RectType} from '../functional/types';
 
 /**
  * Image viewer Class
  */
-export class Box2dViewer extends BaseViewer2D {
+export class Box2DViewer extends BaseViewer2D {
   /**
-   * @param {BaseController} controller
+   * @param {BaseController} controller: reference to Box2DController
    * @constructor
    */
-  constructor(controller: BaseController) {
+  constructor(controller/* : BaseController */) {
     super(controller, 'label-canvas');
     // $FlowFixMe
     let self = this;
     this.canvas.addEventListener('mouseup', function(e) {
-      self.controller.mouseUp(e);
+      self.controller.mouseUp(self.getMousePos(e));
     });
   }
 
@@ -39,12 +39,11 @@ export class Box2dViewer extends BaseViewer2D {
 
   /**
    * Draw a single box
-   * @param {RectType} rect
+   * @param {RectType} rect: rectangle to be drawn
    */
   drawRect(rect: RectType) {
       this.context.save();
-      let [x, y] = this.toCanvasCoords([rect.x, rect.y]);
-      let [w, h] = this.toCanvasCoords([rect.w, rect.h], false);
+      let [x, y, w, h] = this.toCanvasCoords([rect.x, rect.y, rect.w, rect.h]);
       this.context.lineWidth = 2 * this.UP_RES_RATIO;
       // this.context.strokeStyle = strokeStyle;
       this.context.strokeRect(x, y, w, h);

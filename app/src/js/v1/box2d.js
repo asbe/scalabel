@@ -141,6 +141,7 @@ Box2d.prototype.fromExportFormat = function(exportFormat) {
     this.rect.setRect(x1, y1, x2 - x1, y2 - y1);
     this.categoryPath = exportFormat.category;
     this.attributes = exportFormat.attributes;
+    this.keyframe = exportFormat.manualShape;
     return this;
   }
   return null;
@@ -203,7 +204,9 @@ Box2d.prototype.redrawLabelCanvas = function(mainCtx) {
   if (this.state === BoxStates.FREE) {
     let tlx = Math.min(this.rect.x, this.rect.x + this.rect.w);
     let tly = Math.min(this.rect.y, this.rect.y + this.rect.h);
-    this.drawTag(mainCtx, [tlx, tly]);
+    if (!this.satItem.soloMode) {
+      this.drawTag(mainCtx, [tlx, tly]);
+    }
   }
 };
 

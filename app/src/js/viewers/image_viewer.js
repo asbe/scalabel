@@ -1,17 +1,17 @@
 import {BaseViewer2D} from './image_base_viewer';
-import {BaseController} from '../controllers/base_controller';
-import Session from '../common/session';
+/* :: import {BaseController} from '../controllers/base_controller'; */
+import Session from '../common/session_single';
 
 /**
  * Image viewer Class
  */
 export class ImageViewer extends BaseViewer2D {
   /**
-   * @param {BaseController} controller
+   * @param {BaseController} controller: reference to controller
    * @constructor
    */
-  constructor(controller: BaseController) {
-    super(controller, 'image-canvas');
+  constructor(controller/* : BaseController */) {
+    super(controller, 'image-canvas', '', false);
   }
   /**
    * Redraw the image canvas.
@@ -24,14 +24,10 @@ export class ImageViewer extends BaseViewer2D {
     }
     let item = this.getCurrentItem();
     let image = Session.images[item.index];
-    // update the padding box
-    let padBox = this._getPadding();
     // draw stuff
-    this.context.clearRect(0, 0, padBox.w, padBox.h);
+    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.context.drawImage(image, 0, 0, image.width, image.height,
-      padBox.x, padBox.y, padBox.w, padBox.h);
+      0, 0, this.canvas.width, this.canvas.height);
     return true;
   }
 }
-
-

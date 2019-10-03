@@ -1,7 +1,7 @@
 import $ from 'jquery';
-import Session from '../common/session';
+import Session from '../common/session_single';
 import {BaseViewer} from './base_viewer';
-import {ToolboxController} from '../controllers/toolbox_controller';
+/* :: import {ToolboxController} from '../controllers/toolbox_controller'; */
 import {sprintf} from 'sprintf-js';
 import 'bootstrap-switch';
 
@@ -11,10 +11,10 @@ import 'bootstrap-switch';
  */
 export class ToolboxViewer extends BaseViewer {
   /**
-   * @param {ToolboxController} controller
+   * @param {ToolboxController} controller: reference to controller
    * @constructor
    */
-  constructor(controller: ToolboxController) {
+  constructor(controller/* : ToolboxController */) {
     super(controller);
     let self = this;
     let categories: Array<string> = Session.getState().config.categories;
@@ -63,14 +63,16 @@ export class ToolboxViewer extends BaseViewer {
     //   save();
     // };
     for (let i = 0; i < attributes.length; i++) {
-      for (let j = 0; j < attributes[i].values.length; j++) {
-        $('#custom_attributeselector_' + i + '-' + j).on('click',
+      if (attributes[i].values) {
+        for (let j = 0; j < attributes[i].values.length; j++) {
+          $('#custom_attributeselector_' + i + '-' + j).on('click',
             function(e) {
               e.preventDefault();
               // TODO: [j] should have multiple elements for multi-level
               // selection
               self.controller.selectAttribute(i, [j]);
             });
+        }
       }
     }
   }
@@ -89,17 +91,19 @@ export class ToolboxViewer extends BaseViewer {
     let label = state.labels[currentItem.labels[0]];
     let attributesMap = state.config.attributes;
     for (let i = 0; i < attributesMap.length; i++) {
-      for (let j = 0; j < attributesMap[i].values.length; j++) {
-        let selector = $('#custom_attributeselector_' + i + '-' + j);
-        let selectedIndices = null;
-        if (label && label.attributes) {
-          selectedIndices = label.attributes[attributesMap[i].name];
-        }
-        if (label && label.attributes
-          && selectedIndices && selectedIndices[0] === j) {
-          selector.addClass('active');
-        } else {
-          selector.removeClass('active');
+      if (attributesMap[i].values) {
+        for (let j = 0; j < attributesMap[i].values.length; j++) {
+          let selector = $('#custom_attributeselector_' + i + '-' + j);
+          let selectedIndices = null;
+          if (label && label.attributes) {
+            selectedIndices = label.attributes[attributesMap[i].name];
+          }
+          if (label && label.attributes
+            && selectedIndices && selectedIndices[0] === j) {
+            selector.addClass('active');
+          } else {
+            selector.removeClass('active');
+          }
         }
       }
     }

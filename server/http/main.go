@@ -3,32 +3,50 @@ package main
 import (
 	"flag"
 	"fmt"
-	"gopkg.in/yaml.v2"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
+	"time"
+
+	"gopkg.in/yaml.v2"
 )
 
 var (
-	Trace      *log.Logger
-	Info       *log.Logger
-	Warning    *log.Logger
+	// Trace traces error when printed to log
+	Trace *log.Logger
+	// Info is used for logging non-error/warning info
+	Info *log.Logger
+	// Warning logs warnings
+	Warning *log.Logger
+	// Error logs errors
 	Error      *log.Logger
 	configPath string
 )
 
-// Stores the config info found in config.yml
+// Env stores the config info found in config.yml
 type Env struct {
-	Port          int    `yaml:"port"`
-	DataDir       string `yaml:"data"`
-	SrcPath       string `yaml:"src"`
-	AppSubDir     string `yaml:"appSubDir"`
-	Database      string `yaml:"database"`
-	ModelGateHost string `yaml:"modelGateHost"`
-	ModelGatePort string `yaml:"modelGatePort"`
+	Port           int    `yaml:"port"`
+	DataDir        string `yaml:"data"`
+	SrcPath        string `yaml:"src"`
+	AppSubDir      string `yaml:"appSubDir"`
+	Database       string `yaml:"database"`
+	Sync           bool   `yaml:"sync"`
+	UserManagement bool   `yaml:"userManagement"`
+	Region         string `yaml:"region"`
+	DomainName     string `yaml:"domainName"`
+	ClientId       string `yaml:"clientId"`
+	RedirectUri    string `yaml:"redirectUri"`
+	LogOutUri      string `yaml:"logOutUri"`
+	ClientSecret   string `yaml:"clientSecret"`
+	AWSTokenUrl    string `yaml:"awsTokenURL"`
+	AwsJwkUrl      string `yaml:"awsJwkUrl"`
+	UserPoolId     string `yaml:"userPoolID"`
+	SyncHost       string `yaml:"syncHost"`
+	SyncPort       int    `yaml:"syncPort"`
 }
 
 func (env Env) AppDir() string {
@@ -47,15 +65,25 @@ func (env Env) VendorPath() string {
 	return path.Join(env.AppDir(), "control/vendor.html")
 }
 
-func (env Env) Label2dPath(v string) string {
-    if (v == "2") {
-        return path.Join(env.AppDir(), "annotation/label.html")
-    } else {
-        return path.Join(env.AppDir(), "annotation/image.html")
-    }
+func (env Env) WorkerPath() string {
+	return path.Join(env.AppDir(), "control/worker.html")
 }
 
-func (env Env) Label3dPath() string {
+func (env Env) AdminPath() string {
+	return path.Join(env.AppDir(), "control/admin.html")
+}
+
+func (env Env) Label2dPath(v string) string {
+	if v == "2" {
+		return path.Join(env.AppDir(), "annotation/label.html")
+	}
+	return path.Join(env.AppDir(), "annotation/image.html")
+}
+
+func (env Env) Label3dPath(v string) string {
+	if v == "2" {
+		return path.Join(env.AppDir(), "annotation/label.html")
+	}
 	return path.Join(env.AppDir(), "annotation/point_cloud.html")
 }
 
@@ -97,12 +125,13 @@ func Init(
 func NewEnv() *Env {
 	env := new(Env)
 	// read config file
-	cfg, err := ioutil.ReadFile(configPath)
+	cfg, err := ioutil.ReadFile(filepath.Clean(configPath))
 	Info.Printf("Configuration:\n%s", cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	err = yaml.Unmarshal(cfg, &env)
+	Info.Println(env)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -113,26 +142,27 @@ func NewEnv() *Env {
 }
 
 func InitStorage(database string, dir string) Storage {
-	var storage Storage
+	var newStorage Storage
 	switch database {
 	case "s3":
-		storage = &S3Storage{}
+		newStorage = &S3Storage{}
 	case "dynamodb":
-		storage = &DynamodbStorage{}
+		newStorage = &DynamodbStorage{}
 	case "local":
-		storage = &FileStorage{}
+		newStorage = &FileStorage{}
 	default:
 		Error.Panic(fmt.Sprintf("Unknown database %s", database))
 	}
-	err := storage.Init(dir)
+	err := newStorage.Init(dir)
 	if err != nil {
 		Error.Panic(err)
 	}
-	return storage
+	return newStorage
 }
 
 var env Env
 var storage Storage
+var Users = make(map[string]*User) // store the refreshTokens in the map
 
 func main() {
 	Init(ioutil.Discard, os.Stdout, os.Stdout, os.Stderr)
@@ -144,8 +174,8 @@ func main() {
 
 	// flow control handlers
 	//http.HandleFunc("/", parse(indexHandler))
-	http.HandleFunc("/", WrapHandler(http.FileServer(
-		http.Dir(path.Join(env.SrcPath, env.AppSubDir)))))
+	fileServer := http.FileServer(http.Dir(env.AppDir()))
+	http.HandleFunc("/", WrapHandler(fileServer))
 	http.HandleFunc("/dashboard", WrapHandleFunc(dashboardHandler))
 	http.HandleFunc("/vendor", WrapHandleFunc(vendorHandler))
 	http.HandleFunc("/postProject", WrapHandleFunc(postProjectHandler))
@@ -154,23 +184,38 @@ func main() {
 	http.HandleFunc("/postSaveV2", WrapHandleFunc(postSaveV2Handler))
 	http.HandleFunc("/postExport", WrapHandleFunc(postExportHandler))
 	http.HandleFunc("/postExportV2", WrapHandleFunc(postExportV2Handler))
-	http.HandleFunc("/postDownloadTaskURL", WrapHandleFunc(downloadTaskURLHandler))
+	http.HandleFunc("/postDownloadTaskURL",
+		WrapHandleFunc(downloadTaskUrlHandler))
 	http.HandleFunc("/postLoadAssignment",
 		WrapHandleFunc(postLoadAssignmentHandler))
 	http.HandleFunc("/postLoadAssignmentV2",
 		WrapHandleFunc(postLoadAssignmentV2Handler))
+	http.HandleFunc("/auth", authHandler)
+	http.HandleFunc("/load", loadHandler)
+	http.HandleFunc("/workerDashboard", WrapHandleFunc(workerDashboardHandler))
+	http.HandleFunc("/adminDashboard", WrapHandleFunc(adminDashboardHandler))
+	http.HandleFunc("/logOut", WrapHandleFunc(logOutHandler))
+	http.HandleFunc("/postUsers", WrapHandleFunc(postUsersHandler))
+	http.HandleFunc("/postProjectNames",
+		WrapHandleFunc(postProjectNamesHandler))
+	http.HandleFunc("/postDashboardContents",
+		WrapHandleFunc(postDashboardContentsHandler))
 
 	// Simple static handlers can be generated with MakePathHandleFunc
-	http.HandleFunc("/create",
-		WrapHandleFunc(MakePathHandleFunc(env.CreatePath())))
+	http.HandleFunc("/create", WrapHandleFunc(createHandler))
 	http.HandleFunc("/label2d", WrapHandleFunc(Label2dHandler))
 	http.HandleFunc("/label2dv2", WrapHandleFunc(Label2dv2Handler))
 	http.HandleFunc("/label3d", WrapHandleFunc(Label3dHandler))
-
-	//Get information of the gateway server
-	http.HandleFunc("/dev/gateway", WrapHandleFunc(gatewayHandler))
+	http.HandleFunc("/label3dv2", WrapHandleFunc(Label3dv2Handler))
 
 	Info.Printf("Listening to Port %d", env.Port)
 	Info.Printf("Local URL: localhost:%d", env.Port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", env.Port), nil))
+	server := &http.Server{
+		Addr:           fmt.Sprintf(":%d", env.Port),
+		Handler:        nil,
+		ReadTimeout:    1800 * time.Second,
+		WriteTimeout:   1800 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	log.Fatal(server.ListenAndServe())
 }

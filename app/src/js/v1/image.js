@@ -190,9 +190,11 @@ SatImage.prototype.selectLabel = function(label) {
 SatImage.prototype.updateLabelCount = function() {
   let numLabels = 0;
   if (this.sat.tracks) {
-    for (let track of this.sat.tracks) {
-      if (track.valid) {
-        numLabels += 1;
+    for (let item of this.sat.items) {
+      for (let label of item.labels) {
+        if (label.valid && label.children.length === 0 && label.keyframe) {
+          numLabels += 1;
+        }
       }
     }
   } else {
@@ -673,7 +675,7 @@ SatImage.prototype.redrawLabelCanvas = function() {
       self.labelCanvas.width * UP_RES_RATIO,
       self.labelCanvas.height * UP_RES_RATIO);
   for (let label of self.labels) {
-    if (label.valid) {
+    if (label.valid && !(this.soloMode && this.selectedLabel !== label)) {
       label.redrawLabelCanvas(self.labelCtx, self.hoveredLabel);
     }
   }
@@ -689,7 +691,9 @@ SatImage.prototype.redrawHiddenCanvas = function() {
       self.hiddenCanvas.height * UP_RES_RATIO);
   for (let i = 0; i < self._hiddenMap.list.length; i++) {
     let shape = self._hiddenMap.get(i);
-    shape.drawHidden(self.hiddenCtx, self, hiddenStyleColor(i));
+    if (!this.soloMode || this.getLabelOfShape(shape) === this.selectedLabel) {
+      shape.drawHidden(self.hiddenCtx, self, hiddenStyleColor(i));
+    }
   }
 };
 
@@ -764,11 +768,7 @@ SatImage.prototype._keydown = function(e) {
       this.ctrlCommandPressed();
     } else if (keyID === 72) { // ctrl-h for hiding all labels
       e.preventDefault();
-      if (this.labelCanvas.style.visibility === 'visible') {
-        this.labelCanvas.style.visibility = 'hidden';
-      } else {
-        this.labelCanvas.style.visibility = 'visible';
-      }
+      this.soloMode = this.soloMode !== true;
       this.ctrlCommandPressed();
     } else if (keyID === 76 &&
         $('#track_link_btn').length) {
@@ -912,7 +912,7 @@ SatImage.prototype._mousedown = function(e) {
     // ctrl down
     let rectDiv = this.divCanvas.getBoundingClientRect();
     if (this.imageCanvas.width > rectDiv.width ||
-      this.imageCanvas.height > rectDiv.height) {
+        this.imageCanvas.height > rectDiv.height) {
       // if needed, start grabbing
       this.labelCanvas.style.cursor = 'grabbing';
       this.grabbingImage = true;
@@ -944,7 +944,7 @@ SatImage.prototype._mousedown = function(e) {
           self.selectedLabel.mousedown(e);
         } else {
           self.catSel = document.getElementById('category_select');
-          let cat = self.catSel.options[self.catSel.selectedIndex].innerHTML;
+          let cat = self.catSel.options[self.catSel.selectedIndex].textContent;
           let attributes = self._getSelectedAttributes();
           self.selectLabel(self.sat.newLabel({
             categoryPath: cat, attributes: attributes, mousePos: mousePos,
@@ -1117,7 +1117,8 @@ SatImage.prototype._mouseup = function(e) {
         setTimeout(function() {
           if (!self.selectedLabel) {
             self.catSel = document.getElementById('category_select');
-            let cat = self.catSel.options[self.catSel.selectedIndex].innerHTML;
+            let cat = self.catSel.options[self.catSel.selectedIndex]
+                .textContent;
             let mousePos = self.getMousePos(e);
 
             let attributes = self._getSelectedAttributes();
@@ -1287,7 +1288,7 @@ SatImage.prototype._changeSelectedLabelCategory = function() {
   let self = this;
   if (self.selectedLabel) {
     self.catSel = document.getElementById('category_select');
-    let option = self.catSel.options[self.catSel.selectedIndex].innerHTML;
+    let option = self.catSel.options[self.catSel.selectedIndex].textContent;
     self.selectedLabel.setCategoryPath(option);
     self.redrawLabelCanvas();
   }
@@ -1327,7 +1328,7 @@ SatImage.prototype._attributeListSelect = function(
     let value = this.sat.attributes[attributeIndex].values[selectedIndex];
     if (this.selectedLabel.parent) {
       this.selectedLabel.parent.childAttributeChanged(attributeName,
-        [selectedIndex, value], this.selectedLabel.id);
+          [selectedIndex, value], this.selectedLabel.id);
     }
     this.selectedLabel.attributes = {...this.selectedLabel.attributes};
     this.selectedLabel.attributeframe = true;
@@ -1375,7 +1376,7 @@ SatImage.prototype._selectAttributeFromList = function(
 SatImage.prototype._setCatSel = function(categoryPath) {
   this.catSel = document.getElementById('category_select');
   for (let i = 0; i < this.catSel.options.length; i++) {
-    if (this.catSel.options[i].innerHTML === categoryPath) {
+    if (this.catSel.options[i].textContent === categoryPath) {
       this.catSel.selectedIndex = i;
       break;
     }

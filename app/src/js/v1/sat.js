@@ -396,6 +396,13 @@ Sat.prototype.save = function() {
   let self = this;
   let json = self.toJson();
   let xhr = new XMLHttpRequest();
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState === 4) {
+      if (JSON.parse(xhr.response) === 0) {
+        alert('Saved successfully.');
+      }
+    }
+  };
   xhr.open('POST', './postSave');
   xhr.send(JSON.stringify(json));
 };
@@ -445,6 +452,7 @@ Sat.prototype.encodeBaseJson = function() {
         attributes: self.attributes,
         instructions: self.instructions,
         demoMode: self.demoMode,
+        interpolationMode: self.interpolationMode,
         bundleFile: self.bundleFile,
         submitted: self.submitted,
       },
@@ -468,8 +476,6 @@ Sat.prototype.encodeBaseJson = function() {
 Sat.prototype.fromJson = function(json) {
   let self = this;
   self.decodeBaseJson(json);
-  // save after importing labels
-  self.save();
 };
 
 /**
@@ -622,7 +628,8 @@ SatItem.prototype.toJson = function() {
     }
   }
   return {url: self.url, index: self.index,
-    labelIds: labelIds, labelImport: null};
+    labelIds: labelIds, labelImport: null,
+    name: self.name, videoName: self.videoName, timestamp: self.timestamp};
 };
 
 /**
@@ -637,10 +644,17 @@ SatItem.prototype.fromJson = function(json) {
   let self = this;
   self.url = json.url;
   self.index = json.index;
+  self.name = json.name;
+  self.videoName = json.videoName;
+  self.timestamp = json.timestamp;
   if (json.labelIds) {
     for (let i = 0; i < json.labelIds.length; i++) {
       let label = self.sat.labelIdMap[json.labelIds[i]];
-      self.labels.push(label);
+      if (!label.shapesValid()) {
+        label.delete();
+      } else {
+        self.labels.push(label);
+      }
       label.satItem = this;
     }
   }

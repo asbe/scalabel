@@ -2,17 +2,17 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"math"
-	"reflect"
+	"sort"
 )
 
+// Poly2d datatype for 2d polygon
 type Poly2d struct {
 	Vertices [][]float64 `json:"vertices" yaml:"vertices"`
 	Types    string      `json:"types" yaml:"types"`
 	Closed   bool        `json:"closed" yaml:"closed"`
 }
 
+// ItemExport datatype
 type ItemExport struct {
 	Name       string            `json:"name" yaml:"name"`
 	Url        string            `json:"url" yaml:"url"`
@@ -23,6 +23,7 @@ type ItemExport struct {
 	Labels     []LabelExport     `json:"labels" yaml:"labels"`
 }
 
+// LabelExport datatype
 type LabelExport struct {
 	Id          int                    `json:"id" yaml:"id"`
 	Category    string                 `json:"category" yaml:"category"`
@@ -33,7 +34,28 @@ type LabelExport struct {
 	Box3d       map[string]interface{} `json:"box3d" yaml:"box3d"`
 }
 
+type ItemExportV2 struct {
+	Name       string            `json:"name" yaml:"name"`
+	Url        string            `json:"url" yaml:"url"`
+	VideoName  string            `json:"videoName" yaml:"videoName"`
+	Attributes map[string]string `json:"attributes" yaml:"attributes"`
+	Timestamp  int64             `json:"timestamp" yaml:"timestamp"`
+	Index      int               `json:"index" yaml:"index"`
+	Labels     []LabelExportV2   `json:"labels" yaml:"labels"`
+}
+type LabelExportV2 struct {
+	Id          int                    `json:"id" yaml:"id"`
+	Category    string                 `json:"category" yaml:"category"`
+	Attributes  map[string]interface{} `json:"attributes" yaml:"attributes"`
+	ManualShape bool                   `json:"manualShape" yaml:"manualShape"`
+	Box2d       interface{}            `json:"box2d" yaml:"box2d"`
+	Poly2d      []Poly2d               `json:"poly2d" yaml:"poly2d"`
+	Box3d       interface{}            `json:"box3d" yaml:"box3d"`
+}
+
 // structs for saved data
+
+// VertexData for single vertex
 type VertexData struct {
 	Id   int     `json:"id" yaml:"id"`
 	X    float64 `json:"x" yaml:"x"`
@@ -41,6 +63,7 @@ type VertexData struct {
 	Type string  `json:"type" yaml:"type"`
 }
 
+// EdgeData for single edge
 type EdgeData struct {
 	Id            int          `json:"id" yaml:"id"`
 	Src           int          `json:"src" yaml:"src"`
@@ -49,12 +72,14 @@ type EdgeData struct {
 	ControlPoints []VertexData `json:"control_points" yaml:"control_points"`
 }
 
+// PolylineData for multiple edges and vertices
 type PolylineData struct {
 	Id       int          `json:"id" yaml:"id"`
 	Vertices []VertexData `json:"vertices" yaml:"vertices"`
 	Edges    []EdgeData   `json:"edges" yaml:"edges"`
 }
 
+// Box2dData for single box
 type Box2dData struct {
 	X float64 `json:"x" yaml:"x"`
 	Y float64 `json:"y" yaml:"y"`
@@ -62,23 +87,25 @@ type Box2dData struct {
 	H float64 `json:"h" yaml:"h"`
 }
 
+// Poly2dData for multiple polylines
 type Poly2dData struct {
 	Closed bool           `json:"closed" yaml:"closed"`
 	Polys  []PolylineData `json:"polys" yaml:"polys"`
 }
 
-func MapToStruct(m map[string]interface{}, val interface{}) error {
+// MapToStruct checks if map can be converted into struct
+func MapToStruct(m map[string]interface{}, val interface{}) {
 	tmp, err := json.Marshal(m)
 	if err != nil {
-		return err
+		Error.Println(err)
 	}
 	err = json.Unmarshal(tmp, val)
 	if err != nil {
-		return err
+		Error.Println(err)
 	}
-	return nil
 }
 
+// ParseBox2d parses map into a box2dData
 func ParseBox2d(data map[string]interface{}) map[string]interface{} {
 	_box2d := Box2dData{}
 	MapToStruct(data, &_box2d)
@@ -91,6 +118,7 @@ func ParseBox2d(data map[string]interface{}) map[string]interface{} {
 	return box2d
 }
 
+// ParsePoly2d parses map into a Poly2dData
 func ParsePoly2d(data map[string]interface{}) []Poly2d {
 	_poly2d := Poly2dData{}
 	MapToStruct(data, &_poly2d)
@@ -100,14 +128,14 @@ func ParsePoly2d(data map[string]interface{}) []Poly2d {
 		poly := Poly2d{}
 		types := []byte{}
 		for i, vertex := range _poly.Vertices {
-			v_xy := []float64{vertex.X, vertex.Y}
-			poly.Vertices = append(poly.Vertices, v_xy)
+			vXY := []float64{vertex.X, vertex.Y}
+			poly.Vertices = append(poly.Vertices, vXY)
 			types = append(types, 'L')
 			if i < len(_poly.Edges) && _poly.Edges[i].Type == "bezier" {
 				if (i < len(_poly.Edges)-1) || (_poly2d.Closed) {
 					for _, c := range _poly.Edges[i].ControlPoints {
-						c_xy := []float64{c.X, c.Y}
-						poly.Vertices = append(poly.Vertices, c_xy)
+						cXY := []float64{c.X, c.Y}
+						poly.Vertices = append(poly.Vertices, cXY)
 						types = append(types, 'C')
 					}
 				}
@@ -120,29 +148,7 @@ func ParsePoly2d(data map[string]interface{}) []Poly2d {
 	return poly2ds
 }
 
-var floatType = reflect.TypeOf(float64(0))
-var integerType = reflect.TypeOf(int(0))
-var stringType = reflect.TypeOf("")
-
-func getFloatSlice(unk interface{}) ([]float64, error) {
-	if reflect.TypeOf(unk).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("cannot convert interface to slice")
-	}
-
-	v := reflect.ValueOf(unk)
-	array := make([]float64, v.Len())
-
-	for i := 0; i < v.Len(); i++ {
-		val, ok := v.Index(i).Interface().(float64)
-		if !ok {
-			return nil, fmt.Errorf("cannot convert interface to slice")
-		}
-		array[i] = val
-	}
-
-	return array, nil
-}
-
+/* The following code is unused
 func rotateXAxis3D(vector []float64, angle float64) error {
 	if len(vector) != 3 {
 		return fmt.Errorf("Input array was not 3 dimensional")
@@ -183,8 +189,9 @@ func rotateZAxis3D(vector []float64, angle float64) error {
 	vector[1] = math.Sin(angle)*x + math.Cos(angle)*y
 
 	return nil
-}
+} */
 
+// ParseBox3d parses a map into a box3d
 func ParseBox3d(data map[string]interface{}) map[string]interface{} {
 	var box3d = map[string]interface{}{}
 
@@ -193,4 +200,60 @@ func ParseBox3d(data map[string]interface{}) map[string]interface{} {
 	box3d["dimension"] = data["scale"]
 
 	return box3d
+}
+
+//Parses SatLabel attributes for exportable format
+func parseSatLabelAttributes(map[string][]int) map[string]interface{} {
+
+	return map[string]interface{}{}
+}
+
+// helper function for v2 exporting, converts ItemData to ItemExportV2
+func exportItemData(
+	itemToLoad ItemData,
+	satConfig ConfigData,
+	taskIndex int,
+	itemType string,
+	projectName string) ItemExportV2 {
+	item := ItemExportV2{}
+	item.Index = itemToLoad.Index
+	if itemType == "video" {
+		item.VideoName = projectName + "_" + Index2str(taskIndex)
+	}
+
+	item.Timestamp = satConfig.SubmitTime
+	item.Name = itemToLoad.Url
+	item.Url = itemToLoad.Url
+	// TODO: add attributes when implemented
+	// item.Attributes = parseAttributes(itemToLoad.attributes)
+
+	// map every label to its SatShape and create correct ordering
+	labelMap := make(map[int]int)
+	labelMapKeys := make([]int, 0)
+	for _, shape := range itemToLoad.Shapes {
+		for _, labelId := range shape.Label {
+			labelMap[labelId] = shape.Id
+			labelMapKeys = append(labelMapKeys, labelId)
+		}
+	}
+
+	sort.Ints(labelMapKeys)
+	item.Labels = []LabelExportV2{}
+	itemLabel := LabelExportV2{}
+
+	// Iterate over labels and convert them to an exportable format
+	for _, labelId := range labelMapKeys {
+		shapeId := labelMap[labelId]
+		labelToLoad := itemToLoad.Labels[labelId]
+		itemLabel.Id = labelId
+		itemLabel.Attributes = parseSatLabelAttributes(labelToLoad.Attributes)
+		// TODO: Handle multiple categories
+		itemLabel.Category = satConfig.Categories[labelToLoad.Category[0]]
+		if labelToLoad.Type == "box2d" {
+			itemLabel.ManualShape = false
+			itemLabel.Box2d = itemToLoad.Shapes[shapeId].Shape
+		}
+		item.Labels = append(item.Labels, itemLabel)
+	}
+	return item
 }

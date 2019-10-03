@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/mitchellh/mapstructure"
-	"github.com/satori/go.uuid"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -14,10 +12,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mitchellh/mapstructure"
+	uuid "github.com/satori/go.uuid"
 )
 
 // TODO: use actual worker ID
-const DEFAULT_WORKER = "default_worker"
+const DefaultWorker = "default_worker"
 
 type NotExistError struct {
 	name string
@@ -31,13 +32,36 @@ func Index2str(id int) string {
 	return fmt.Sprintf("%06d", id)
 }
 
+/**
+ * Fetch names of all existing projects in the data folder
+**/
+func GetExistingProjects() []string {
+	files, err := ioutil.ReadDir(env.DataDir)
+	names := []string{}
+	if err != nil {
+		return names
+	}
+
+	for _, f := range files {
+		name := f.Name()
+		// remove hidden files and the config file
+		if !strings.ContainsAny(name, ".") {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func GetProject(projectName string) (Project, error) {
 	fields, err := storage.Load(path.Join(projectName, "project"))
 	project := Project{}
 	if err != nil {
 		return project, err
 	}
-	mapstructure.Decode(fields, &project)
+	err = mapstructure.Decode(fields, &project)
+	if err != nil {
+		Error.Println(err)
+	}
 	return project, nil
 }
 
@@ -59,7 +83,10 @@ func GetTask(projectName string, index string) (Task, error) {
 	if err != nil {
 		return task, err
 	}
-	mapstructure.Decode(fields, &task)
+	err = mapstructure.Decode(fields, &task)
+	if err != nil {
+		Error.Println(err)
+	}
 	return task, nil
 }
 
@@ -75,7 +102,10 @@ func GetTasksInProject(projectName string) ([]Task, error) {
 			return []Task{}, err
 		}
 		task := Task{}
-		mapstructure.Decode(fields, &task)
+		err = mapstructure.Decode(fields, &task)
+		if err != nil {
+			Error.Println(err)
+		}
 		tasks = append(tasks, task)
 	}
 	// sort tasks by index
@@ -86,9 +116,10 @@ func GetTasksInProject(projectName string) ([]Task, error) {
 }
 
 // Get the most recent assignment given the needed fields.
-func GetAssignment(projectName string, taskIndex string, workerId string) (Assignment, error) {
+func GetAssignment(projectName string, taskIndex string,
+	workerId string) (Assignment, error) {
 	assignment := Assignment{}
-	submissionsPath := path.Join(projectName, "submissions", taskIndex, workerId)
+	submissionsPath := GetSatPath(projectName, taskIndex, workerId)
 	keys := storage.ListKeys(submissionsPath)
 	// if any submissions exist, get the most recent one
 	if len(keys) > 0 {
@@ -96,14 +127,20 @@ func GetAssignment(projectName string, taskIndex string, workerId string) (Assig
 		if err != nil {
 			return Assignment{}, err
 		}
-		mapstructure.Decode(fields, &assignment)
+		err = mapstructure.Decode(fields, &assignment)
+		if err != nil {
+			Error.Println(err)
+		}
 	} else {
-		assignmentPath := path.Join(projectName, "assignments", taskIndex, workerId)
+		assignmentPath := GetAssignmentPath(projectName, taskIndex, workerId)
 		fields, err := storage.Load(assignmentPath)
 		if err != nil {
 			return Assignment{}, err
 		}
-		mapstructure.Decode(fields, &assignment)
+		err = mapstructure.Decode(fields, &assignment)
+		if err != nil {
+			Error.Println(err)
+		}
 	}
 	// Asssigns default value for BundleFile
 	// Should get rid of this and separate bundleFiles in the future
@@ -113,19 +150,23 @@ func GetAssignment(projectName string, taskIndex string, workerId string) (Assig
 	return assignment, nil
 }
 
-func CreateAssignment(projectName string, taskIndex string, workerId string) (Assignment, error) {
+func CreateAssignment(projectName string, taskIndex string,
+	workerId string) (Assignment, error) {
 	task, err := GetTask(projectName, taskIndex)
 	if err != nil {
 		return Assignment{}, err
 	}
-	uuid := getUUIDv4()
+	uuid := getUuidV4()
 	assignment := Assignment{
 		Id:        uuid,
 		Task:      task,
 		WorkerId:  workerId,
 		StartTime: recordTimestamp(),
 	}
-	storage.Save(assignment.GetKey(), assignment.GetFields())
+	err = storage.Save(assignment.GetKey(), assignment.GetFields())
+	if err != nil {
+		Error.Println(err)
+	}
 	return assignment, nil
 }
 
@@ -138,40 +179,54 @@ func GetDashboardContents(projectName string) (DashboardContents, error) {
 	if err != nil {
 		return DashboardContents{}, err
 	}
+	projectMetaData := ProjectMetaData{
+		Name:              project.Options.Name,
+		ItemType:          project.Options.ItemType,
+		LabelType:         project.Options.LabelType,
+		TaskSize:          project.Options.TaskSize,
+		NumItems:          len(project.Items),
+		NumLeafCategories: project.Options.NumLeafCategories,
+		NumAttributes:     len(project.Options.Attributes),
+	}
+	taskMetaDatas := []TaskMetaData{}
+	/* Iterate of tasks to send meta data for each one,
+	instead of sending the entire task and doing this work later */
+	for index, task := range tasks {
+		taskMetaData := TaskMetaData{
+			NumLabeledImages: countLabeledImages(projectName, index),
+			NumLabels:        countLabelsInTask(projectName, index),
+			Submitted:        taskSubmitted(projectName, index),
+			HandlerUrl:       task.ProjectOptions.HandlerUrl,
+		}
+		taskMetaDatas = append(taskMetaDatas, taskMetaData)
+	}
 	return DashboardContents{
-		Project: project,
-		Tasks:   tasks,
+		ProjectMetaData: projectMetaData,
+		TaskMetaDatas:   taskMetaDatas,
 	}, nil
 }
 
 func GetHandlerUrl(itemType string, labelType string) string {
 	switch itemType {
 	case "image":
-		if labelType == "box2d" || labelType == "segmentation" || labelType == "lane" {
-			return "label2d"
-		}
-		if labelType == "tag" || labelType == "box2dv2" {
-			return "label2dv2"
-		}
-		return "NO_VALID_HANDLER"
+		return "label2d"
 	case "video":
 		if labelType == "box2d" || labelType == "segmentation" {
 			return "label2d"
-		} else {
-			return "NO_VALID_HANDLER"
 		}
+		return "NO_VALID_HANDLER"
+
 	case "pointcloud":
 		if labelType == "box3d" {
 			return "label3d"
-		} else {
-			return "NO_VALID_HANDLER"
 		}
+		return "NO_VALID_HANDLER"
+
 	case "pointcloudtracking":
 		if labelType == "box3d" {
 			return "label3d"
-		} else {
-			return "NO_VALID_HANDLER"
 		}
+		return "NO_VALID_HANDLER"
 	}
 	return "NO_VALID_HANDLER"
 }
@@ -183,11 +238,8 @@ func recordTimestamp() int64 {
 
 func Exists(name string) bool {
 	_, err := os.Stat(name)
-	if os.IsNotExist(err) {
-		return false
-	} else {
-		return true
-	}
+	return !os.IsNotExist(err)
+
 }
 
 func Min(x, y int) int {
@@ -197,17 +249,6 @@ func Min(x, y int) int {
 	return y
 }
 
-// Behavior is similar to path stem in Python
-func PathStem(name string) string {
-	name = path.Base(name)
-	dotIndex := strings.LastIndex(name, ".")
-	if dotIndex < 0 {
-		return name
-	} else {
-		return name[:dotIndex]
-	}
-}
-
 // check duplicated project name
 // return false if duplicated
 func CheckProjectName(projectName string) string {
@@ -215,74 +256,68 @@ func CheckProjectName(projectName string) string {
 	if storage.HasKey(path.Join(projectName, "project")) {
 		Error.Printf("Project Name \"%s\" already exists.", projectName)
 		return ""
-	} else {
-		return newName
 	}
+	return newName
+
 }
 
 // Count the total number of images labeled in a task
 func countLabeledImages(projectName string, index int) int {
-	assignment, err := GetAssignment(projectName, Index2str(index), DEFAULT_WORKER)
-	if assignment.Task.ProjectOptions.LabelType == "" {
-		sat, err := GetSat(projectName, Index2str(index), DEFAULT_WORKER)
-		if err != nil {
-			if _, ok := err.(*NotExistError); !ok {
-				Error.Println(err)
-			}
-			return 0
-		}
-		numLabeledItems := len(sat.Labels)
-		// TODO: add labels that are imported but not loaded yet
-		return numLabeledItems
+	// return the number of labeled images in the import file if not initialized
+	task, err := GetTask(projectName, Index2str(index))
+	if err != nil {
+		Error.Println(err)
 	}
+	if task.NumLabeledItemImport > 0 {
+		return task.NumLabeledItemImport
+	}
+	assignment, err := GetAssignment(projectName, Index2str(index),
+		DefaultWorker)
 	if err != nil {
 		if _, ok := err.(*NotExistError); !ok {
 			Error.Println(err)
+			return 0
 		}
-		return 0
 	}
-	numLabeledItems := assignment.NumLabeledItems
-	// TODO: add labels that are imported but not loaded yet
-	return numLabeledItems
+	return assignment.NumLabeledItems
 }
 
 // Count the total number of labels in a task
 func countLabelsInTask(projectName string, index int) int {
-	assignment, err := GetAssignment(projectName, Index2str(index), DEFAULT_WORKER)
-	if assignment.Task.ProjectOptions.LabelType == "" {
-		sat, err := GetSat(projectName, Index2str(index), DEFAULT_WORKER)
-		if err != nil {
-			if _, ok := err.(*NotExistError); !ok {
-				Error.Println(err)
-			}
-			return 0
-		}
-		numLabeledItems := 0
-		for _, label := range sat.Labels {
-			numLabeledItems += len(label.Attributes)
-		}
-		// TODO: add labels that are imported but not loaded yet
-		return numLabeledItems
+	// return the number of labels in the import file if not initialized
+	task, err := GetTask(projectName, Index2str(index))
+	if err != nil {
+		Error.Println(err)
 	}
+	if task.NumLabelImport > 0 {
+		return task.NumLabelImport
+	}
+	assignment, err := GetAssignment(projectName, Index2str(index),
+		DefaultWorker)
 	if err != nil {
 		if _, ok := err.(*NotExistError); !ok {
 			Error.Println(err)
+			return 0
 		}
-		return 0
 	}
+	// Count labels
 	numLabels := len(assignment.Labels)
-	// for videos, count the number of tracks
+	// for videos, count the number of keyframes
 	if assignment.Task.ProjectOptions.ItemType == "video" {
-		numLabels = len(assignment.Tracks)
-	} else {
-		// TODO: add labels that are imported but not loaded yet
+		numLabels = 0
+		for _, label := range assignment.Labels {
+			if label.Keyframe {
+				numLabels++
+			}
+		}
 	}
 	return numLabels
 }
 
 // Check if a given task is submitted
 func taskSubmitted(projectName string, index int) bool {
-	assignment, err := GetAssignment(projectName, Index2str(index), DEFAULT_WORKER)
+	assignment, err := GetAssignment(projectName, Index2str(index),
+		DefaultWorker)
 	if err != nil {
 		return false
 	}
@@ -290,7 +325,7 @@ func taskSubmitted(projectName string, index int) bool {
 }
 
 // Get UUIDv4
-func getUUIDv4() string {
+func getUuidV4() string {
 	uuid, err := uuid.NewV4()
 	if err != nil {
 		Error.Println(err)
@@ -420,13 +455,19 @@ var groundCoefficientsFinder = regexp.MustCompile(
 
 func parsePLYForGround(url string) ([4]float64, error) {
 	var coefficients [4]float64
-	r, err := http.Get(url)
+	// TODO: Make sure this url get isn't tainted and remove nolint
+	r, err := http.Get(url) // nolint
+	if err != nil {
+		Error.Println(err)
+	}
 	if err != nil {
 		return coefficients, err
 	}
 	defer r.Body.Close()
 	contents, err := ioutil.ReadAll(r.Body)
-
+	if err != nil {
+		Error.Println(err)
+	}
 	groundCoeffBytes := groundCoefficientsFinder.Find(contents)
 
 	if groundCoeffBytes == nil {
@@ -440,7 +481,8 @@ func parsePLYForGround(url string) ([4]float64, error) {
 	}
 
 	if len(coefficientByteArrays) != 4 {
-		return coefficients, errors.New("Incorrect number of ground coefficients")
+		errString := "Incorrect number of ground coefficients"
+		return coefficients, errors.New(errString)
 	}
 
 	for i, coeffArr := range coefficientByteArrays {
@@ -451,4 +493,12 @@ func parsePLYForGround(url string) ([4]float64, error) {
 	}
 
 	return coefficients, nil
+}
+
+// Writes nil to a http request
+func writeNil(w http.ResponseWriter) {
+	_, err := w.Write(nil)
+	if err != nil {
+		Error.Println(err)
+	}
 }

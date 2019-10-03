@@ -5,157 +5,164 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mitchellh/mapstructure"
 	"html/template"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"path"
-	"reflect"
 	"strconv"
+
+	"github.com/mitchellh/mapstructure"
 )
 
-//Sat state
+// Sat state
 type Sat struct {
-	Config  SatConfig     `json:"config" yaml:"config"`
-	Current SatCurrent    `json:"current" yaml:"current"`
-	Items   []SatItem     `json:"items" yaml:"items"`
-	Labels  LabelMap      `json:"labels" yaml:"labels"`
-	Tracks  TrackMap      `json:"tracks" yaml:"tracks"`
-	Shapes  ShapeMap      `json:"shapes" yaml:"shapes"`
-	Actions []interface{} `json:"actions" yaml:"actions"`
+	Task    TaskData    `json:"task" yaml:"task"`
+	User    UserData    `json:"user" yaml:"user"`
+	Session SessionData `json:"session" yaml:"session"`
 }
 
-type LabelMap map[int]SatLabel
-
-func (labels *LabelMap) UnmarshalJSON(data []byte) error {
-	(*labels) = make(map[int]SatLabel)
-	var fields map[string]interface{}
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	for k, v := range fields {
-		label := SatLabel{}
-		mapstructure.Decode(v, &label)
-		i, err := strconv.Atoi(k)
-		if err != nil {
-			return err
-		}
-		(*labels)[i] = label
-	}
-	return nil
+// Task specific data
+type TaskData struct {
+	Config ConfigData `json:"config" yaml:"config"`
+	Status TaskStatus `json:"status" yaml:"status"`
+	Items  []ItemData `json:"items" yaml:"items"`
+	Tracks TrackMap   `json:"tracks" yaml:"tracks"`
 }
 
-type ShapeMap map[int]interface{}
-
-func (shapes *ShapeMap) UnmarshalJSON(data []byte) error {
-	(*shapes) = make(map[int]interface{})
-	var fields map[string]interface{}
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	for k, v := range fields {
-		i, err := strconv.Atoi(k)
-		if err != nil {
-			return err
-		}
-		(*shapes)[i] = v
-	}
-	return nil
-}
-
-type TrackMap map[int][]SatLabel
-
-func (tracks *TrackMap) UnmarshalJSON(data []byte) error {
-	(*tracks) = make(map[int][]SatLabel)
-	var fields map[string]interface{}
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	for k, v := range fields {
-		var labels []SatLabel
-		mapstructure.Decode(v, &labels)
-		i, err := strconv.Atoi(k)
-		if err != nil {
-			return err
-		}
-		(*tracks)[i] = labels
-	}
-	return nil
-}
-
-func (sat *Sat) GetKey() string {
-	return path.Join(sat.Config.ProjectName, "submissions", sat.Config.TaskId,
-		sat.Config.WorkerId, strconv.FormatInt(sat.Config.SubmitTime, 10))
-}
-
-func (sat *Sat) GetFields() map[string]interface{} {
-	return map[string]interface{}{
-		"config":  sat.Config,
-		"current": sat.Current,
-		"items":   sat.Items,
-		"labels":  sat.Labels,
-		"tracks":  sat.Tracks,
-		"shapes":  sat.Shapes,
-		"actions": sat.Actions,
-	}
-}
-
-//current state of Sat
-type SatCurrent struct {
-	Item        int `json:"item" yaml:"item"`
-	Label       int `json:"label" yaml:"label"`
-	MaxObjectId int `json:"maxObjectId" yaml:"maxObjectId"`
-}
-
-//Sat configuration state
-type SatConfig struct {
-	AssignmentId    string      `json:"assignmentId" yaml:"assignmentId"`
+// Task properties not changed during lifetime of a session
+type ConfigData struct {
 	ProjectName     string      `json:"projectName" yaml:"projectName"`
 	ItemType        string      `json:"itemType" yaml:"itemType"`
-	LabelType       string      `json:"labelType" yaml:"labelType"`
+	LabelTypes      []string    `json:"labelTypes" yaml:"labelTypes"`
 	TaskSize        int         `json:"taskSize" yaml:"taskSize"`
 	HandlerUrl      string      `json:"handlerUrl" yaml:"handlerUrl"`
 	PageTitle       string      `json:"pageTitle" yaml:"pageTitle"`
 	InstructionPage string      `json:"instructionPage" yaml:"instructionPage"`
-	DemoMode        bool        `json:"demoMode" yaml:"demoMode"`
 	BundleFile      string      `json:"bundleFile" yaml:"bundleFile"`
 	Categories      []string    `json:"categories" yaml:"categories"`
 	Attributes      []Attribute `json:"attributes" yaml:"attributes"`
 	TaskId          string      `json:"taskId" yaml:"taskId"`
-	WorkerId        string      `json:"workerId" yaml:"workerId"`
-	StartTime       int64       `json:"startTime" yaml:"startTime"`
 	SubmitTime      int64       `json:"submitTime" yaml:"submitTime"`
+	Sync            bool        `json:"sync" yaml:"sync"`
+	SyncAddress     string      `json:"syncAddress" yaml:"syncAddress"`
 }
 
-type SatItem struct {
-	Id     int    `json:"id" yaml:"id"`
-	Index  int    `json:"index" yaml:"index"`
-	Url    string `json:"url" yaml:"url"`
-	Active bool   `json:"active" yaml:"active"`
-	Loaded bool   `json:"loaded" yaml:"loaded"`
-	Labels []int  `json:"labels, []int" yaml:"labels"`
+// Task properties that depend on the current state of session
+type TaskStatus struct {
+	MaxLabelId int `json:"maxLabelId" yaml:"maxLabelId"`
+	MaxShapeId int `json:"maxShapeId" yaml:"maxShapeId"`
+	MaxOrder   int `json:"maxOrder" yaml:"maxOrder"`
 }
 
-type SatLabel struct {
-	Id            int              `json:"id" yaml:"id"`
-	Item          int              `json:"item" yaml:"item"`
-	Category      []int            `json:"category" yaml:"category"`
-	Attributes    map[string][]int `json:"attributes" yaml:"attributes"`
-	Parent        int              `json:"parent" yaml:"parent"`
-	Children      []int            `json:"children" yaml:"children"`
-	NumChildren   int              `json:"numChildren" yaml:"numChildren"`
-	Valid         bool             `json:"valid" yaml:"valid"`
-	Shapes        []int            `json:"shapes" yaml:"shapes"`
-	SelectedShape int              `json:"selectedShape" yaml:"selectedShape"`
-	State         int              `json:"state" yaml:"state"`
+// Contains data for single item
+type ItemData struct {
+	Id     int               `json:"id" yaml:"id"`
+	Index  int               `json:"index" yaml:"index"`
+	Url    string            `json:"url" yaml:"url"`
+	Labels map[int]LabelData `json:"labels" yaml:"labels"`
+	Shapes map[int]ShapeData `json:"shapes" yaml:"shapes"`
 }
 
-// Get the most recent assignment given the needed fields.
-func GetSat(projectName string, taskIndex string, workerId string) (Sat, error) {
+// Contains data for single label
+type LabelData struct {
+	Id         int              `json:"id" yaml:"id"`
+	Item       int              `json:"item" yaml:"item"`
+	Type       string           `json:"type" yaml:"type"`
+	Category   []int            `json:"category" yaml:"category"`
+	Attributes map[string][]int `json:"attributes" yaml:"attributes"`
+	Parent     int              `json:"parent" yaml:"parent"`
+	Children   []int            `json:"children" yaml:"children"`
+	Shapes     []int            `json:"shapes" yaml:"shapes"`
+	Track      int              `json:"track" yaml:"track"`
+	Order      int              `json:"order" yaml:"order"`
+	Manual     bool             `json:"manual" yaml:"manual"`
+}
+
+// Contains data for single shape
+type ShapeData struct {
+	Id    int         `json:"id" yaml:"id"`
+	Label []int       `json:"label" yaml:"label"`
+	Type  string      `json:"type" yaml:"type"`
+	Shape interface{} `json:"shape" yaml:"shape"`
+}
+
+// Data for tracks
+type TrackMap map[int]interface{}
+
+// User specific data
+type UserData struct {
+	UserId               string                 `json:"id" yaml:"id"`
+	Selection            SelectedData           `json:"select" yaml:"select"`
+	Layout               LayoutData             `json:"layout" yaml:"layout"`
+	ImageViewConfig      ImageViewerConfig      `json:"imageViewerConfig" yaml:"imageViewerConfig"`
+	PointCloudViewConfig PointCloudViewerConfig `json:"pointCloudViewerConfig" yaml:"pointCloudViewerConfig"`
+}
+
+// User's currently selected data
+type SelectedData struct {
+	Item      int `json:"item" yaml:"item"`
+	Label     int `json:"label" yaml:"label"`
+	Shape     int `json:"shape" yaml:"shape"`
+	Category  int `json:"category" yaml:"category"`
+	Attributes map[int][]int `json:"attributes" yaml:"attributes"`
+	LabelType int `json:"labelType" yaml:"labelType"`
+}
+
+// Data for frontend layout
+type LayoutData struct {
+	ToolbarWidth       int     `json:"toolbarWidth" yaml:"toolbarWidth"`
+	AssistantView      bool    `json:"assistantView" yaml:"assistantView"`
+	AssistantViewRatio float32 `json:"assistantViewRatio" yaml:"assistantViewRatio"`
+}
+
+type ImageViewerConfig struct {
+	ImageWidth  int     `json:"imageWidth" yaml:"imageWidth"`
+	ImageHeight int     `json:"imageHeight" yaml:"imageHeight"`
+	ViewScale   float32 `json:"viewScale" yaml:"viewScale"`
+	DisplayTop  int     `json:"displayTop" yaml:"displayTop"`
+	DisplayLeft int     `json:"displayLeft" yaml:"displayLeft"`
+}
+
+type Vector3D struct {
+	X float32 `json:"x" yaml:"x"`
+	Y float32 `json:"y" yaml:"y"`
+	Z float32 `json:"z" yaml:"z"`
+}
+
+type PointCloudViewerConfig struct {
+	Target       Vector3D `json:"target" yaml:"target"`
+	Position     Vector3D `json:"position" yaml:"position"`
+	VerticalAxis Vector3D `json:"verticalAxis" yaml:"verticalAxis"`
+}
+
+// Session specific data
+type SessionData struct {
+	SessionId    string       `json:"id" yaml:"id"`
+	DemoMode     bool         `json:"demoMode" yaml:"demoMode"`
+	StartTime    int64        `json:"startTime" yaml:"startTime"`
+	ItemStatuses []ItemStatus `json:"items" yaml:"items"`
+}
+
+// Item status
+type ItemStatus struct {
+	Loaded bool `json:"loaded" yaml:"loaded"`
+}
+
+// GetFields returns sat as a map
+func (sat *Sat) GetFields() map[string]interface{} {
+	return map[string]interface{}{
+		"task":    sat.Task,
+		"user":    sat.User,
+		"session": sat.Session,
+	}
+}
+
+// LoadSat loads the most recent assignment given the needed fields.
+func LoadSat(projectName string, taskIndex string,
+	workerId string) (Sat, error) {
 	sat := Sat{}
-	submissionsPath := path.Join(projectName, "submissions", taskIndex, workerId)
-	keys := storage.ListKeys(submissionsPath)
+	keys := storage.ListKeys(GetSatPath(projectName, taskIndex, workerId))
 	// if any submissions exist, get the most recent one
 	if len(keys) > 0 {
 		Info.Printf("Reading %s\n", keys[len(keys)-1])
@@ -172,30 +179,39 @@ func GetSat(projectName string, taskIndex string, workerId string) (Sat, error) 
 		}
 	} else {
 		var assignment Assignment
-		assignmentPath := path.Join(projectName, "assignments", taskIndex, workerId)
+		assignmentPath := GetAssignmentPath(projectName, taskIndex, workerId)
 		Info.Printf("Reading %s\n", assignmentPath)
 		fields, err := storage.Load(assignmentPath)
 		if err != nil {
 			return Sat{}, err
 		}
-		mapstructure.Decode(fields, &assignment)
+		err = mapstructure.Decode(fields, &assignment)
+		if err != nil {
+			return Sat{}, err
+		}
 		sat = assignmentToSat(&assignment)
 	}
 	return sat, nil
 }
 
-func GetAssignmentV2(projectName string, taskIndex string, workerId string) (Assignment, error) {
+// GetAssignmentV2 retrieves assignment
+func GetAssignmentV2(projectName string, taskIndex string,
+	workerId string) (Assignment, error) {
 	assignment := Assignment{}
-	assignmentPath := path.Join(projectName, "assignments", taskIndex, workerId)
+	assignmentPath := GetAssignmentPath(projectName, taskIndex, workerId)
 	fields, err := storage.Load(assignmentPath)
 	if err != nil {
 		return Assignment{}, err
 	}
-	mapstructure.Decode(fields, &assignment)
+	err = mapstructure.Decode(fields, &assignment)
+	if err != nil {
+		return Assignment{}, err
+	}
 	return assignment, nil
 }
 
-// Handles the loading of an assignment given its project name, task index, and worker ID.
+/* Handles the loading of an assignment given
+   its project name, task index, and worker ID. */
 func postLoadAssignmentV2Handler(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -210,53 +226,78 @@ func postLoadAssignmentV2Handler(w http.ResponseWriter, r *http.Request) {
 	taskIndex := Index2str(assignmentToLoad.Task.Index)
 	var loadedAssignment Assignment
 	var loadedSat Sat
-	if !storage.HasKey(path.Join(projectName, "assignments",
-		taskIndex, DEFAULT_WORKER)) {
+	// If no submission or assignment exist, create a new assignment
+	assignmentPath := GetAssignmentPath(projectName, taskIndex, DefaultWorker)
+	satPath := GetSatPath(projectName, taskIndex, DefaultWorker)
+	if !storage.HasKey(assignmentPath) && len(storage.ListKeys(satPath)) == 0 {
 		// if assignment does not exist, create it
 		loadedAssignment, err = CreateAssignment(projectName, taskIndex,
-			DEFAULT_WORKER)
+			DefaultWorker)
 		if err != nil {
 			Error.Println(err)
 			return
 		}
 		loadedSat = assignmentToSat(&loadedAssignment)
 	} else {
-		loadedSat, err = GetSat(projectName, taskIndex,
-			DEFAULT_WORKER)
+		loadedSat, err = LoadSat(projectName, taskIndex,
+			DefaultWorker)
 		if err != nil {
 			Error.Println(err)
 			return
 		}
 	}
-	loadedSat.Config.StartTime = recordTimestamp()
+	loadedSat.Session.StartTime = recordTimestamp()
+
+	// Update state with config variables needed by frontend
+	loadedSat.Task.Config.Sync = env.Sync
+	if (env.Sync) {
+		syncPort := strconv.Itoa(env.SyncPort)
+		syncAddress := fmt.Sprintf("%s:%s", env.SyncHost, syncPort)
+		loadedSat.Task.Config.SyncAddress = syncAddress
+	}
+
+	// temporary fix to ensure sessions have different IDs
+	loadedSat.Session.SessionId = getUuidV4()
 	loadedSatJson, err := json.Marshal(loadedSat)
 	if err != nil {
 		Error.Println(err)
 	}
-	w.Write(loadedSatJson)
+	_, err = w.Write(loadedSatJson)
+	if err != nil {
+		Error.Println(err)
+	}
 }
 
-func executeLabelingTemplateV2(w http.ResponseWriter, r *http.Request, tmpl *template.Template) {
+func executeLabelingTemplateV2(w http.ResponseWriter, r *http.Request,
+	tmpl *template.Template) {
 	// get task name from the URL
 	projectName := r.URL.Query()["project_name"][0]
 	taskIndex, _ := strconv.ParseInt(r.URL.Query()["task_index"][0], 10, 32)
-	if !storage.HasKey(path.Join(projectName, "assignments",
-		Index2str(int(taskIndex)), DEFAULT_WORKER)) {
+	if !storage.HasKey(GetAssignmentPath(projectName,
+		Index2str(int(taskIndex)), DefaultWorker)) {
 		// if assignment does not exist, create it
-		assignment, err := CreateAssignment(projectName, Index2str(int(taskIndex)), DEFAULT_WORKER)
+		assignment, err := CreateAssignment(projectName,
+			Index2str(int(taskIndex)), DefaultWorker)
 		if err != nil {
 			Error.Println(err)
 			return
 		}
-		tmpl.Execute(w, assignment)
+		err = tmpl.Execute(w, assignment)
+		if err != nil {
+			Error.Println(err)
+		}
 	} else {
 		// otherwise, get that assignment
-		assignment, err := GetAssignmentV2(projectName, Index2str(int(taskIndex)), DEFAULT_WORKER)
+		assignment, err := GetAssignmentV2(projectName,
+			Index2str(int(taskIndex)), DefaultWorker)
 		if err != nil {
 			Error.Println(err)
 			return
 		}
-		tmpl.Execute(w, assignment)
+		err = tmpl.Execute(w, assignment)
+		if err != nil {
+			Error.Println(err)
+		}
 	}
 }
 
@@ -268,6 +309,14 @@ func Label2dv2Handler(w http.ResponseWriter, r *http.Request) {
 	executeLabelingTemplateV2(w, r, tmpl)
 }
 
+func Label3dv2Handler(w http.ResponseWriter, r *http.Request) {
+	tmpl, err := template.ParseFiles(env.Label3dPath(r.FormValue("v")))
+	if err != nil {
+		Error.Println(err)
+	}
+	executeLabelingTemplate(w, r, tmpl)
+}
+
 // Essentially rewriting the decodeBaseJson logic, need to get rid of this
 // when backend is completely transferred to redux
 func assignmentToSat(assignment *Assignment) Sat {
@@ -275,56 +324,123 @@ func assignmentToSat(assignment *Assignment) Sat {
 	for _, category := range assignment.Task.ProjectOptions.Categories {
 		categories = append(categories, category.Name)
 	}
-	var items []SatItem
+	var items []ItemData
+	var itemStatuses []ItemStatus
 	for _, item := range assignment.Task.Items {
-		satItem := SatItem{
+		satItem := ItemData{
 			Id:     item.Index,
 			Index:  item.Index,
 			Url:    item.Url,
-			Labels: []int{},
+			Labels: map[int]LabelData{},
+			Shapes: map[int]ShapeData{},
+		}
+		itemStatus := ItemStatus{
+			Loaded: false,
 		}
 		items = append(items, satItem)
+		itemStatuses = append(itemStatuses, itemStatus)
 	}
 	// only items are needed because this function is only called once
 	// at the first visit to annotation interface before submission
 	// and will go away when redux have its own project creation logic
-	labels := map[int]SatLabel{}
-	tracks := map[int][]SatLabel{}
-	shapes := map[int]interface{}{}
 	projectOptions := assignment.Task.ProjectOptions
-	loadedSatConfig := SatConfig{
-		AssignmentId:    assignment.Id,
+
+	configData := ConfigData{
 		ProjectName:     projectOptions.Name,
 		ItemType:        projectOptions.ItemType,
-		LabelType:       projectOptions.LabelType,
+		LabelTypes:      []string{projectOptions.LabelType},
 		TaskSize:        projectOptions.TaskSize,
 		HandlerUrl:      projectOptions.HandlerUrl,
 		PageTitle:       projectOptions.PageTitle,
 		InstructionPage: projectOptions.Instructions,
-		DemoMode:        projectOptions.DemoMode,
 		BundleFile:      projectOptions.BundleFile,
 		Categories:      categories,
 		Attributes:      projectOptions.Attributes,
 		TaskId:          Index2str(assignment.Task.Index),
-		WorkerId:        assignment.WorkerId,
-		StartTime:       assignment.StartTime,
 		SubmitTime:      assignment.SubmitTime,
 	}
-	satCurrent := SatCurrent{
-		Item:        -1,
-		Label:       -1,
-		MaxObjectId: -1,
+
+	taskData := TaskData{
+		Config: configData,
+		Items:  items,
+		Tracks: TrackMap{},
 	}
+
+	attributes := make(map[int][]int)
+	for i := 0; i < len(projectOptions.Attributes); i++ {
+		attributes[i] = []int{0}
+	}
+
+	selectedData := SelectedData{
+		Item:  0,
+		Label: 0,
+		Attributes: attributes,
+	}
+
+	imageViewConfig := ImageViewerConfig{
+		ImageWidth:  0,
+		ImageHeight: 0,
+		ViewScale:   1.0,
+		DisplayLeft: 0,
+		DisplayTop:  0,
+	}
+
+	target := Vector3D{
+		X: 0.,
+		Y: 0.,
+		Z: 0.,
+	}
+
+	position := Vector3D{
+		X: 0.,
+		Y: 10.,
+		Z: 0.,
+	}
+
+	verticalAxis := Vector3D{
+		X: 0.,
+		Y: 0.,
+		Z: 1.,
+	}
+
+	pointCloudViewConfig := PointCloudViewerConfig{
+		Target:       target,
+		Position:     position,
+		VerticalAxis: verticalAxis,
+	}
+
+	userData := UserData{
+		UserId:               assignment.WorkerId,
+		Selection:            selectedData,
+		ImageViewConfig:      imageViewConfig,
+		PointCloudViewConfig: pointCloudViewConfig,
+	}
+
+	uuid := getUuidV4()
+	sessionData := SessionData{
+		SessionId:    uuid,
+		DemoMode:     projectOptions.DemoMode,
+		StartTime:    assignment.StartTime,
+		ItemStatuses: itemStatuses,
+	}
+
 	loadedSat := Sat{
-		Config:  loadedSatConfig,
-		Current: satCurrent,
-		Items:   items,
-		Labels:  labels,
-		Tracks:  tracks,
-		Shapes:  shapes,
-		Actions: []interface{}{},
+		Task:    taskData,
+		User:    userData,
+		Session: sessionData,
 	}
 	return loadedSat
+}
+
+//Saves a Sat Object
+func (sat Sat) save() error {
+	if sat.Session.DemoMode {
+		return errors.New("can't save a demo project")
+	}
+
+	sat.Task.Config.SubmitTime = recordTimestamp()
+	err := storage.Save(sat.GetKey(), sat.GetFields())
+	return err
 }
 
 func postSaveV2Handler(w http.ResponseWriter, r *http.Request) {
@@ -336,30 +452,34 @@ func postSaveV2Handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Error.Println(err)
 	}
-	// var fields map[string]interface{}
-	// err = json.Unmarshal(body, &fields)
-	// if err != nil {
-	// 	   Error.Println(err)
-	// }
-	// assignment := Sat{}
-	// mapstructure.Decode(fields, &assignment)
-	assignment := Sat{}
-	err = json.Unmarshal(body, &assignment)
+
+	sat := Sat{}
+	err = json.Unmarshal(body, &sat)
 	if err != nil {
 		Error.Println(err)
-	}
-	if assignment.Config.DemoMode {
-		Error.Println(errors.New("can't save a demo project"))
-		w.Write(nil)
+		writeNil(w)
 		return
 	}
-	// TODO: don't send all events to front end, and append these events to most recent
-	assignment.Config.SubmitTime = recordTimestamp()
-	err = storage.Save(assignment.GetKey(), assignment.GetFields())
+
+	// Save the data
+	err = sat.save()
+	if err != nil {
+		Error.Println(err)
+		writeNil(w)
+		return
+	}
+
+	// Send back 0 for success
+	response, err := json.Marshal(0)
+	if err != nil {
+		Error.Println(err)
+		writeNil(w)
+		return
+	}
+	_, err = w.Write(response)
 	if err != nil {
 		Error.Println(err)
 	}
-	w.Write(nil)
 }
 
 // Handles the export of submitted assignments
@@ -371,54 +491,39 @@ func postExportV2Handler(w http.ResponseWriter, r *http.Request) {
 		Error.Println(err)
 	}
 	projectToLoad := Project{}
-	mapstructure.Decode(fields, &projectToLoad)
-
+	err = mapstructure.Decode(fields, &projectToLoad)
+	if err != nil {
+		Error.Println(err)
+	}
 	// Grab the latest submissions from all tasks
 	tasks, err := GetTasksInProject(projectName)
 	if err != nil {
 		Error.Println(err)
 		return
 	}
-	items := []ItemExport{}
+	items := []ItemExportV2{}
+	sat := Sat{}
 	for _, task := range tasks {
-		sat, err := GetSat(projectName, Index2str(task.Index), DEFAULT_WORKER)
+		sat, err = LoadSat(projectName, Index2str(task.Index), DefaultWorker)
 		if err == nil {
-			for _, itemToLoad := range sat.Items {
-				item := ItemExport{}
-				item.Index = itemToLoad.Index
-				if projectToLoad.Options.ItemType == "video" {
-					item.VideoName = projectToLoad.Options.Name + "_" + Index2str(task.Index)
-				}
-				item.Timestamp = 10000 // to be fixed
-				item.Name = itemToLoad.Url
-				item.Url = itemToLoad.Url
-				item.Attributes = map[string]string{}
-				if len(itemToLoad.Labels) > 0 {
-					itemLabel := sat.Labels[itemToLoad.Labels[0]]
-					keys := reflect.ValueOf(itemLabel.Attributes).MapKeys()
-					strkeys := make([]string, len(keys))
-					for i := 0; i < len(keys); i++ {
-						strkeys[i] = keys[i].String()
-					}
-					for _, key := range strkeys {
-						for _, attribute := range sat.Config.Attributes {
-							if attribute.Name == key {
-								item.Attributes[key] = attribute.Values[itemLabel.Attributes[key][0]]
-								break
-							}
-						}
-					}
-				}
+			for _, itemToLoad := range sat.Task.Items {
+				item := exportItemData(
+					itemToLoad,
+					sat.Task.Config,
+					task.Index,
+					projectToLoad.Options.ItemType,
+					projectToLoad.Options.Name)
 				items = append(items, item)
 			}
 		} else {
 			// if file not found, return list of items with url
 			Info.Println(err)
 			for _, itemToLoad := range task.Items {
-				item := ItemExport{}
+				item := ItemExportV2{}
 				item.Index = itemToLoad.Index
 				if projectToLoad.Options.ItemType == "video" {
-					item.VideoName = projectToLoad.Options.Name + "_" + Index2str(task.Index)
+					item.VideoName = projectToLoad.Options.Name +
+						"_" + Index2str(task.Index)
 				}
 				item.Timestamp = 10000 // to be fixed
 				item.Name = itemToLoad.Url
@@ -436,5 +541,9 @@ func postExportV2Handler(w http.ResponseWriter, r *http.Request) {
 	//set relevant header.
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf("attachment; filename=%s_results.json", projectName))
-	io.Copy(w, bytes.NewReader(exportJson))
+	_, err = io.Copy(w, bytes.NewReader(exportJson))
+	if err != nil {
+		Error.Println(err)
+	}
+
 }
